@@ -9410,15 +9410,10 @@ function encodeForwardedChatError(forwarded) {
 }
 
 // src/vs/platform/agentHost/node/shared/loopbackProxyServer.ts
+import { randomBytes } from "crypto";
 var DEFAULT_BIND_TARGET = { kind: "tcp", host: "127.0.0.1", port: 0 };
 function generateNonce() {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    out += bytes[i].toString(16).padStart(2, "0");
-  }
-  return out;
+  return randomBytes(32).toString("hex");
 }
 function readProxyRequestBody(req) {
   return new Promise((resolve2, reject) => {
