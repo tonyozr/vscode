@@ -8007,16 +8007,26 @@ var f = class {
 
 // src/vs/base/common/uuid.ts
 var generateUuid = (function() {
-  if (typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID.bind(crypto);
+  const cryptoObj = globalThis.crypto;
+  if (typeof cryptoObj?.randomUUID === "function") {
+    return cryptoObj.randomUUID.bind(cryptoObj);
   }
   const _data = new Uint8Array(16);
   const _hex = [];
   for (let i = 0; i < 256; i++) {
     _hex.push(i.toString(16).padStart(2, "0"));
   }
+  const fillRandomValues = (data) => {
+    if (typeof cryptoObj?.getRandomValues === "function") {
+      cryptoObj.getRandomValues(data);
+      return;
+    }
+    for (let i = 0; i < data.length; i++) {
+      data[i] = Math.floor(Math.random() * 256);
+    }
+  };
   return function generateUuid2() {
-    crypto.getRandomValues(_data);
+    fillRandomValues(_data);
     _data[6] = _data[6] & 15 | 64;
     _data[8] = _data[8] & 63 | 128;
     let i = 0;
