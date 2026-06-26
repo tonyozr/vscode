@@ -11,6 +11,39 @@ import { ILogService } from '../../../log/common/log.js';
 // #region Public types
 
 /**
+ * Where a {@link LoopbackProxyServer} binds its listener.
+ *
+ * - `tcp`: an IPv4/IPv6 host + port. `port: 0` lets the OS pick a free port
+ *   (the agent-host default). The standalone CLI proxy passes an explicit
+ *   port the user supplied.
+ * - `socket`: a filesystem path for a unix domain socket. Access is gated by
+ *   filesystem permissions, so the standalone CLI proxy skips bearer auth in
+ *   this mode (see `requireAuth`).
+ */
+export type ProxyBindTarget =
+	| { readonly kind: 'tcp'; readonly host: string; readonly port: number }
+	| { readonly kind: 'socket'; readonly path: string };
+
+/**
+ * Construction-time knobs for {@link LoopbackProxyServer}. Both fields are
+ * optional; the defaults reproduce the agent-host behavior exactly (bind a
+ * random loopback TCP port, require bearer auth) so existing callers and
+ * tests are unaffected.
+ */
+export interface ILoopbackProxyOptions {
+	/** Defaults to a random loopback TCP port (`127.0.0.1:0`). */
+	readonly bindTarget?: ProxyBindTarget;
+	/**
+	 * Whether inbound requests must carry a valid proxy Bearer token.
+	 * Defaults to `true`. Subclasses consult {@link LoopbackProxyServer.requireAuth}
+	 * to decide whether to validate; the base only owns the flag.
+	 */
+	readonly requireAuth?: boolean;
+}
+
+const DEFAULT_BIND_TARGET: ProxyBindTarget = { kind: 'tcp', host: '127.0.0.1', port: 0 };
+
+/**
  * Per-request bookkeeping shared by every loopback proxy. `clientGone`
  * distinguishes a client-driven disconnect (socket already closed — write
  * nothing) from a service-driven `dispose()` (socket still open —
@@ -118,11 +151,23 @@ export abstract class LoopbackProxyServer<TState, TSeed = void> {
 	private _starting: Promise<IInternalRuntime<TState>> | undefined;
 	private _disposed = false;
 
+	/** Where the listener binds; see {@link ProxyBindTarget}. */
+	protected readonly bindTarget: ProxyBindTarget;
+	/**
+	 * Whether inbound requests require a valid proxy Bearer token. Owned here
+	 * but enforced by subclasses inside {@link handleRequest}.
+	 */
+	protected readonly requireAuth: boolean;
+
 	constructor(
 		/** Human-readable name used in log lines and error messages. */
 		protected readonly name: string,
 		protected readonly _logService: ILogService,
-	) { }
+		options?: ILoopbackProxyOptions,
+	) {
+		this.bindTarget = options?.bindTarget ?? DEFAULT_BIND_TARGET;
+		this.requireAuth = options?.requireAuth ?? true;
+	}
 
 	protected get isDisposed(): boolean {
 		return this._disposed;
@@ -280,18 +325,30 @@ export abstract class LoopbackProxyServer<TState, TSeed = void> {
 		await new Promise<void>((resolve, reject) => {
 			const onError = (err: Error) => reject(err);
 			server.once('error', onError);
-			server.listen(0, '127.0.0.1', () => {
+			const onListening = () => {
 				server.removeListener('error', onError);
 				resolve();
-			});
+			};
+			if (this.bindTarget.kind === 'socket') {
+				server.listen(this.bindTarget.path, onListening);
+			} else {
+				server.listen(this.bindTarget.port, this.bindTarget.host, onListening);
+			}
 		});
 
-		const address = server.address();
-		if (!address || typeof address === 'string') {
-			server.close();
-			throw new Error(`${this.name} failed to bind: unexpected address ${String(address)}`);
+		let baseUrl: string;
+		if (this.bindTarget.kind === 'socket') {
+			// No host:port for a unix socket; surface the path so logs and the
+			// SDK-facing `ANTHROPIC_BASE_URL` consumers can identify the bind.
+			baseUrl = `unix:${this.bindTarget.path}`;
+		} else {
+			const address = server.address();
+			if (!address || typeof address === 'string') {
+				server.close();
+				throw new Error(`${this.name} failed to bind: unexpected address ${String(address)}`);
+			}
+			baseUrl = `http://${this.bindTarget.host}:${(address as AddressInfo).port}`;
 		}
-		const baseUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
 		this._logService.info(`[${this.name}] listening on ${baseUrl}`);
 
 		const runtime: IInternalRuntime<TState> = {

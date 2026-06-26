@@ -35,7 +35,7 @@ const INVALID: ProxyBearerAuth = Object.freeze({ valid: false, sessionId: undefi
  * - `Bearer <nonce>.` (empty sessionId)
  * - `Bearer <wrong-nonce>.<sessionId>`
  */
-export function parseProxyBearer(headers: http.IncomingHttpHeaders, expectedNonce: string): ProxyBearerAuth {
+export function parseProxyBearer(headers: http.IncomingHttpHeaders, expectedNonce: string, allowNonceOnly = false): ProxyBearerAuth {
 	const authHeader = headers['authorization'];
 	if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
 		return INVALID;
@@ -44,7 +44,12 @@ export function parseProxyBearer(headers: http.IncomingHttpHeaders, expectedNonc
 	const token = authHeader.slice('Bearer '.length);
 	const dotIndex = token.indexOf('.');
 	if (dotIndex === -1) {
-		// Phase 2 explicitly rejects the legacy nonce-only format.
+		// The agent host always issues `nonce.sessionId` tokens and rejects the
+		// nonce-only format. The standalone CLI proxy has no session concept and
+		// opts into `Bearer <nonce>` via `allowNonceOnly`.
+		if (allowNonceOnly && token === expectedNonce) {
+			return { valid: true, sessionId: undefined };
+		}
 		return INVALID;
 	}
 

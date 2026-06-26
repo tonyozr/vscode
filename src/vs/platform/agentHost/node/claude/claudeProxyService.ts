@@ -20,6 +20,7 @@ import { buildForwardedChatError, encodeForwardedChatError } from '../shared/for
 import {
 	IProxyInFlight,
 	ILoopbackProxyHandle,
+	ILoopbackProxyOptions,
 	ILoopbackProxyRuntime,
 	LoopbackProxyServer,
 	readProxyRequestBody,
@@ -116,6 +117,26 @@ export interface IClaudeProxyService {
 
 export const IClaudeProxyService = createDecorator<IClaudeProxyService>('claudeProxyService');
 
+/**
+ * Construction options for {@link ClaudeProxyService}. Extends the base
+ * loopback options (bind target + whether auth is required) with the
+ * Claude-specific bearer-format choice.
+ *
+ * Defaults (all fields absent) reproduce the agent-host behavior: random
+ * loopback TCP port, auth required, strict `nonce.sessionId` bearer. The
+ * standalone CLI proxy overrides these — e.g. a unix socket with
+ * `requireAuth: false`, or an explicit TCP port with `allowNonceOnlyAuth: true`.
+ */
+export interface IClaudeProxyOptions extends ILoopbackProxyOptions {
+	/**
+	 * Accept `Bearer <nonce>` (without a `.sessionId` suffix) in addition to
+	 * the agent-host `nonce.sessionId` format. The standalone proxy has no
+	 * session concept, so the bearer is just the printed nonce. Defaults to
+	 * `false`. Ignored when {@link ILoopbackProxyOptions.requireAuth} is false.
+	 */
+	readonly allowNonceOnlyAuth?: boolean;
+}
+
 // #endregion
 
 // #region Internal state
@@ -173,11 +194,20 @@ export class ClaudeProxyService extends LoopbackProxyServer<IClaudeProxyState, s
 	private readonly _onDidReportCredits = new Emitter<IClaudeProxyCreditsReport>();
 	readonly onDidReportCredits: Event<IClaudeProxyCreditsReport> = this._onDidReportCredits.event;
 
+	/** See {@link IClaudeProxyOptions.allowNonceOnlyAuth}. */
+	private readonly _allowNonceOnlyAuth: boolean;
+
 	constructor(
 		@ILogService logService: ILogService,
 		@ICopilotApiService private readonly _copilotApiService: ICopilotApiService,
+		// Trailing, non-injected option bag. The agent host constructs this via
+		// `createInstance` with no static args (→ undefined → agent-host
+		// defaults); the standalone CLI proxy passes it explicitly. DI places
+		// injected services last, so a trailing static param is safe here.
+		options?: IClaudeProxyOptions,
 	) {
-		super(PROXY_USER_FACING_NAME, logService);
+		super(PROXY_USER_FACING_NAME, logService, options);
+		this._allowNonceOnlyAuth = options?.allowNonceOnlyAuth ?? false;
 	}
 
 	protected createState(githubToken: string): IClaudeProxyState {
@@ -237,10 +267,17 @@ export class ClaudeProxyService extends LoopbackProxyServer<IClaudeProxyState, s
 			return;
 		}
 
-		const auth = parseProxyBearer(req.headers, runtime.nonce);
-		if (!auth.valid) {
-			writeJsonError(res, 401, 'authentication_error', 'Invalid authentication');
-			return;
+		// `requireAuth` is false only for the standalone CLI proxy bound to a
+		// unix socket, where filesystem permissions gate access and there is no
+		// session id to decode (credits reporting is a no-op without one).
+		let sessionId: string | undefined;
+		if (this.requireAuth) {
+			const auth = parseProxyBearer(req.headers, runtime.nonce, this._allowNonceOnlyAuth);
+			if (!auth.valid) {
+				writeJsonError(res, 401, 'authentication_error', 'Invalid authentication');
+				return;
+			}
+			sessionId = auth.sessionId;
 		}
 
 		if (method === 'GET' && pathname === '/v1/models') {
@@ -249,7 +286,7 @@ export class ClaudeProxyService extends LoopbackProxyServer<IClaudeProxyState, s
 		}
 
 		if (method === 'POST' && pathname === '/v1/messages') {
-			await this._handleMessages(req, res, runtime, auth.sessionId);
+			await this._handleMessages(req, res, runtime, sessionId);
 			return;
 		}
 

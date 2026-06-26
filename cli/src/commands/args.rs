@@ -308,6 +308,30 @@ pub enum AgentSubcommand {
 
 	/// Stream live session events.
 	Logs(AgentLogsArgs),
+
+	/// Run a standalone model API proxy (no agent host / WebSocket session).
+	Proxy(AgentProxyArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AgentProxyArgs {
+	#[clap(subcommand)]
+	pub subcommand: AgentProxySubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum AgentProxySubcommand {
+	/// Proxy the Anthropic Messages API to GitHub Copilot CAPI.
+	Claude(AgentProxyClaudeArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AgentProxyClaudeArgs {
+	/// Where the proxy listens: a unix domain socket path, or a numeric TCP
+	/// port bound on 127.0.0.1. A socket relies on filesystem permissions and
+	/// requires no bearer token; a TCP port mints a bearer token and prints it
+	/// as `PROXY_TOKEN:<token>` once listening.
+	pub target: String,
 }
 
 #[derive(Args, Debug, Clone)]
