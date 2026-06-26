@@ -5,6 +5,7 @@
 
 import type * as http from 'http';
 import { AddressInfo } from 'net';
+import { randomBytes } from 'crypto';
 import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { ILogService } from '../../../log/common/log.js';
 
@@ -100,17 +101,10 @@ interface IInternalRuntime<TState> extends ILoopbackProxyRuntime<TState> {
 }
 
 /**
- * Build the 256-bit hex nonce embedded in the proxy Bearer token. Web Crypto
- * is available in Node 18+.
+ * Build the 256-bit hex nonce embedded in the proxy Bearer token.
  */
 function generateNonce(): string {
-	const bytes = new Uint8Array(32);
-	crypto.getRandomValues(bytes);
-	let out = '';
-	for (let i = 0; i < bytes.length; i++) {
-		out += bytes[i].toString(16).padStart(2, '0');
-	}
-	return out;
+	return randomBytes(32).toString('hex');
 }
 
 // #endregion
