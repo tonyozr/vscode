@@ -11,15 +11,16 @@ export function isUUID(value: string): boolean {
 }
 
 export const generateUuid = (function (): () => string {
+	const cryptoObj = globalThis.crypto;
 
 	// use `randomUUID` if possible
-	if (typeof crypto.randomUUID === 'function') {
+	if (typeof cryptoObj?.randomUUID === 'function') {
 		// see https://developer.mozilla.org/en-US/docs/Web/API/Window/crypto
 		// > Although crypto is available on all windows, the returned Crypto object only has one
 		// > usable feature in insecure contexts: the getRandomValues() method.
 		// > In general, you should use this API only in secure contexts.
 
-		return crypto.randomUUID.bind(crypto);
+		return cryptoObj.randomUUID.bind(cryptoObj);
 	}
 
 	// prep-work
@@ -29,9 +30,19 @@ export const generateUuid = (function (): () => string {
 		_hex.push(i.toString(16).padStart(2, '0'));
 	}
 
+	const fillRandomValues = (data: Uint8Array): void => {
+		if (typeof cryptoObj?.getRandomValues === 'function') {
+			cryptoObj.getRandomValues(data);
+			return;
+		}
+		for (let i = 0; i < data.length; i++) {
+			data[i] = Math.floor(Math.random() * 256);
+		}
+	};
+
 	return function generateUuid(): string {
 		// get data
-		crypto.getRandomValues(_data);
+		fillRandomValues(_data);
 
 		// set version bits
 		_data[6] = (_data[6] & 0x0f) | 0x40;
